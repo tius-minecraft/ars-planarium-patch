@@ -241,6 +241,31 @@ public class PlanariumPatchGameTests {
     }
 
     /**
+     * The update must not be marked as delivered while no player could receive it; otherwise a
+     * planarium on a Sable sub-level stays stale until the client reconnects.
+     */
+    @GameTest(template = "empty", timeoutTicks = 300)
+    public static void templateDeliveryRequiresRecipients(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        MinecraftServer server = level.getServer();
+        ensureSharedLevel(server);
+
+        BlockPos tilePos = helper.absolutePos(new BlockPos(1, 2, 1));
+        PlanariumTile tile = new PlanariumTile(tilePos, BlockRegistry.PLANARIUM.get().defaultBlockState());
+        tile.setLevel(level);
+        tile.setDimension("gametest_delivery", level);
+
+        PlanariumTile.DimManager.Entry entry = PlanariumService.getOrCreateTemplate(level, tile.getBlockPos(), tile.key);
+        helper.assertTrue(entry != null && entry.template() != null, "A fresh entry must be available");
+
+        tile.lastUpdated = 4242L;
+        PlanariumService.sendTemplate(level, tile, entry);
+        helper.assertTrue(tile.lastUpdated == 4242L,
+                "Without a tracking player the update must stay pending");
+        helper.succeed();
+    }
+
+    /**
      * Exercises the one-time copy from an old per-planarium dimension into a cell of the shared
      * dimension (content + spawn), which cannot happen in a normal GameTest world.
      */

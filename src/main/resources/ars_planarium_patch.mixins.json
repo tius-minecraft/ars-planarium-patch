@@ -6,7 +6,8 @@
   "mixins": [
     "PlanariumTileMixin",
     "PlanariumDimManagerMixin",
-    "DimBoundaryMixin"
+    "DimBoundaryMixin",
+    "PacketClientRequestDimMixin"
   ],
   "injectors": {
     "defaultRequire": 1

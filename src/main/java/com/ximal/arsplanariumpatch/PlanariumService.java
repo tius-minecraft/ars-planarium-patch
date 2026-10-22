@@ -9,6 +9,7 @@ import com.hollingsworth.arsnouveau.common.network.PacketUpdateDimTile;
 import com.hollingsworth.arsnouveau.common.world.dimension.PlanariumChunkGenerator;
 import com.hollingsworth.arsnouveau.common.world.saved_data.DimMappingData;
 import com.hollingsworth.arsnouveau.common.world.saved_data.JarDimData;
+import com.hollingsworth.arsnouveau.setup.config.ServerConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.core.Vec3i;
@@ -21,6 +22,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings;
@@ -28,6 +30,8 @@ import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemp
 import net.neoforged.neoforge.event.level.BlockEvent;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -207,16 +211,78 @@ public final class PlanariumService {
         PlanariumTile.DimManager.Entry managerEntry =
                 getOrCreateTemplate(tileLevel, tile.getBlockPos(), dimensionKey);
         if (managerEntry != null) {
-            tile.lastUpdated = managerEntry.lastUpdated();
-            StructureTemplate template = managerEntry.template();
-            if (template != null) {
-                Networking.sendToNearbyClient(tile.getLevel(), tile.getBlockPos(),
-                        new PacketUpdateDimTile(tile.getBlockPos(), template));
-            }
+            sendTemplate(tileLevel, tile, managerEntry);
             tile.updateBlock();
         }
 
         return shared;
+    }
+
+    /**
+     * Server-side tick used instead of {@code PlanariumTile#tick} for the shared dimension.
+     *
+     * <p>The vanilla check {@code playersNearby} compares the planarium's block position with the
+     * logical player positions. For a planarium that sits on a Sable sub-level the block position is
+     * the plot position while the player is at the logical position, so vanilla would stop refreshing
+     * the miniature forever. It also marks the template as sent even when the packet reached nobody.</p>
+     */
+    public static void tick(ServerLevel level, PlanariumTile tile) {
+        if (tile.key == null) {
+            return;
+        }
+        int updateRate = Math.max(1, ServerConfig.PLANARIUM_UPDATE_RATE.get());
+        if (level.getGameTime() % updateRate != 0) {
+            return;
+        }
+
+        PlanariumTile.DimManager.Entry entry = getOrCreateTemplate(level, tile.getBlockPos(), tile.key);
+        if (entry == null || entry.template() == null || entry.lastUpdated() <= tile.lastUpdated) {
+            return;
+        }
+        sendTemplate(level, tile, entry);
+    }
+
+    /**
+     * Sends the snapshot to every player that is actually tracking the planarium's chunk and is in
+     * the planarium's own level. The tile is only considered up to date once at least one player
+     * received the packet, otherwise the update is retried on the next update tick (and by
+     * {@code PacketClientRequestDim} if the client asks first).
+     */
+    public static void sendTemplate(ServerLevel level, PlanariumTile tile, PlanariumTile.DimManager.Entry entry) {
+        StructureTemplate template = entry.template();
+        if (template == null) {
+            return;
+        }
+
+        List<ServerPlayer> recipients = trackingPlayers(level, tile.getBlockPos());
+        if (recipients.isEmpty()) {
+            return;
+        }
+
+        PacketUpdateDimTile packet = new PacketUpdateDimTile(tile.getBlockPos(), template);
+        for (ServerPlayer recipient : recipients) {
+            Networking.sendToPlayerClient(packet, recipient);
+        }
+        tile.lastUpdated = entry.lastUpdated();
+    }
+
+    /**
+     * Sable reports the tracking players of a sub-level plot without filtering by level, so make
+     * sure we only push the miniature to clients that are in the planarium's own level (the plot
+     * position is not resolvable while a player is inside the shared planarium dimension).
+     */
+    private static List<ServerPlayer> trackingPlayers(ServerLevel level, BlockPos pos) {
+        List<ServerPlayer> tracking = level.getChunkSource().chunkMap.getPlayers(new ChunkPos(pos), false);
+        if (tracking.isEmpty()) {
+            return List.of();
+        }
+        List<ServerPlayer> recipients = new ArrayList<>(tracking.size());
+        for (ServerPlayer player : tracking) {
+            if (player.level().dimension().equals(level.dimension())) {
+                recipients.add(player);
+            }
+        }
+        return recipients;
     }
 
     public static void sendEntityTo(PlanariumTile tile, Entity entity) {

@@ -28,6 +28,22 @@ public abstract class PlanariumTileMixin {
     }
 
     /**
+     * Replaces the vanilla refresh loop for shared planaria. The vanilla {@code playersNearby} check
+     * cannot see players that stand on a Sable sub-level (the tile is at its plot position, the
+     * player at the logical one), which leaves the miniature stale until the client reconnects.
+     */
+    @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
+    private void ars_planarium_patch$tick(CallbackInfo ci) {
+        PlanariumTile tile = (PlanariumTile) (Object) this;
+        if (!(tile.getLevel() instanceof ServerLevel serverLevel)
+                || PlanariumDimension.level(serverLevel.getServer()) == null) {
+            return;
+        }
+        PlanariumService.tick(serverLevel, tile);
+        ci.cancel();
+    }
+
+    /**
      * Teleports into the cell of this planarium instead of into a dedicated dimension.
      * The method signature is intentionally unchanged: ars-sable wraps it with @WrapMethod.
      */
