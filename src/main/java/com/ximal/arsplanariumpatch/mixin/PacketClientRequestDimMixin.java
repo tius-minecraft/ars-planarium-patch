@@ -40,6 +40,7 @@ public abstract class PacketClientRequestDimMixin {
         PlanariumTile.DimManager.Entry entry = PlanariumService.getOrCreateTemplate(level, pos, tile.key);
         if (entry != null && entry.template() != null) {
             Networking.sendToPlayerClient(new PacketUpdateDimTile(pos, entry.template()), player);
+            PlanariumService.clearPendingRefresh(tile.key);
         }
         ci.cancel();
     }

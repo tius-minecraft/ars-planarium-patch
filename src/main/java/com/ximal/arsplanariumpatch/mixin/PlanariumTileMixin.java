@@ -28,9 +28,11 @@ public abstract class PlanariumTileMixin {
     }
 
     /**
-     * Replaces the vanilla refresh loop for shared planaria. The vanilla {@code playersNearby} check
+     * Replaces the vanilla refresh loop for shared planaria. Vanilla's {@code playersNearby} check
      * cannot see players that stand on a Sable sub-level (the tile is at its plot position, the
-     * player at the logical one), which leaves the miniature stale until the client reconnects.
+     * player at the logical one), and its timer re-reads the cell while a player builds.
+     * {@link PlanariumService#tick} is event driven: it only works when a block change or a
+     * planarium exit queued a refresh.
      */
     @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
     private void ars_planarium_patch$tick(CallbackInfo ci) {

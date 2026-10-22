@@ -259,9 +259,81 @@ public class PlanariumPatchGameTests {
         helper.assertTrue(entry != null && entry.template() != null, "A fresh entry must be available");
 
         tile.lastUpdated = 4242L;
-        PlanariumService.sendTemplate(level, tile, entry);
+        helper.assertTrue(!PlanariumService.sendTemplate(level, tile, entry),
+                "Without a tracking player the update must be reported as undelivered");
         helper.assertTrue(tile.lastUpdated == 4242L,
                 "Without a tracking player the update must stay pending");
+        helper.succeed();
+    }
+
+    /**
+     * A queued refresh must reload the cell (and pick up blocks placed after the previous snapshot).
+     */
+    @GameTest(template = "empty", timeoutTicks = 300)
+    public static void scheduledRefreshSnapshotsCell(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        MinecraftServer server = level.getServer();
+        ServerLevel shared = ensureSharedLevel(server);
+
+        BlockPos tilePos = helper.absolutePos(new BlockPos(1, 2, 1));
+        PlanariumTile tile = new PlanariumTile(tilePos, BlockRegistry.PLANARIUM.get().defaultBlockState());
+        tile.setLevel(level);
+        tile.setDimension("gametest_scheduled_refresh", level);
+
+        PlanariumLayoutData layout = PlanariumLayoutData.from(server);
+        PlanariumLayoutData.Entry layoutEntry = layout.byId(tile.key.location());
+        helper.assertTrue(layoutEntry != null, "setDimension must allocate a layout entry");
+        BlockPos origin = PlanariumDimension.templateOrigin(
+                PlanariumDimension.base(layoutEntry.cell(), layout.stride()));
+
+        shared.setBlockAndUpdate(origin, Blocks.STONE.defaultBlockState());
+        try {
+            PlanariumTile.dimManager.markDirty(tile.key);
+            PlanariumTile.DimManager.Entry dirty = PlanariumTile.dimManager.entries.get(tile.key);
+            helper.assertTrue(dirty != null && dirty.dirty(), "The cell must be marked dirty");
+
+            PlanariumService.scheduleImmediateRefresh(tile.key, level);
+            PlanariumService.tick(level, tile);
+
+            PlanariumTile.DimManager.Entry refreshed = PlanariumTile.dimManager.entries.get(tile.key);
+            helper.assertTrue(refreshed != null && !refreshed.dirty(),
+                    "A scheduled tick must reload the cell");
+            helper.assertTrue(refreshed != dirty, "The stale entry must be replaced");
+
+            boolean found = ((StructureTemplateAccessor) refreshed.template()).getPalettes().stream()
+                    .flatMap(palette -> palette.blocks().stream())
+                    .anyMatch(block -> block.pos().equals(BlockPos.ZERO) && block.state().is(Blocks.STONE));
+            helper.assertTrue(found, "The refreshed snapshot must contain the new block");
+        } finally {
+            shared.setBlockAndUpdate(origin, Blocks.AIR.defaultBlockState());
+        }
+        helper.succeed();
+    }
+
+    /**
+     * Without an event there is nothing to refresh: a dirty cell must not be re-read (and its chunks
+     * must not be force-loaded) just because the tile ticked.
+     */
+    @GameTest(template = "empty", timeoutTicks = 300)
+    public static void unscheduledDirtyCellIsNotReloaded(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        MinecraftServer server = level.getServer();
+        ensureSharedLevel(server);
+
+        BlockPos tilePos = helper.absolutePos(new BlockPos(1, 2, 1));
+        PlanariumTile tile = new PlanariumTile(tilePos, BlockRegistry.PLANARIUM.get().defaultBlockState());
+        tile.setLevel(level);
+        tile.setDimension("gametest_unscheduled_refresh", level);
+
+        PlanariumTile.dimManager.markDirty(tile.key);
+        PlanariumTile.DimManager.Entry dirty = PlanariumTile.dimManager.entries.get(tile.key);
+        helper.assertTrue(dirty != null && dirty.dirty(), "The cell must be marked dirty");
+
+        PlanariumService.tick(level, tile);
+
+        PlanariumTile.DimManager.Entry after = PlanariumTile.dimManager.entries.get(tile.key);
+        helper.assertTrue(after == dirty, "A tick without a scheduled refresh must not touch the cell");
+        helper.assertTrue(after.dirty(), "The dirty flag must remain until a refresh is scheduled");
         helper.succeed();
     }
 

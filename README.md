@@ -21,11 +21,25 @@ Planarium name, so they are stable and need no central registry.
 | `PlanariumLayoutData` (overworld `SavedData`) | Persistent `name -> id -> cell` mapping, per-cell spawn, migration state, stored grid stride. |
 | `PlanariumTileMixin` | Replaces dimension creation (`setDimension`) and teleport (`sendEntityTo`). |
 | `PlanariumDimManagerMixin` | Loads templates from cells, routes block place/break events to the right cell. |
+| `PlanariumService` | Allocation/migration plus the event-driven miniature refresh. |
 | `DimBoundaryMixin` | Resolves the Dominion Wand spawn point within the clicked cell. |
 | `LegacyDimensionCleanup` | Unregisters old per-Planarium dimensions after their contents were migrated. |
 
 Rendering, networking and the client are untouched: templates are still snapshotted and rendered in
 local 0..31 coordinates.
+
+### Miniature refresh
+
+The miniature is **not** refreshed on a timer. Refreshes are queued by events:
+
+- a player places or breaks a block inside a cell — coalesced with a debounce
+  (`refreshDebounceTicks`, default 100 ticks / 5 s after the last change);
+- a player leaves the Planarium through its boundary — refreshed immediately;
+- a client (re)loads a Planarium and its cached template is missing/stale — the server answers with
+  a freshly loaded snapshot.
+
+An idle Planarium costs one map lookup per tick and never force-loads its cell chunks. Snapshots are
+only taken when one of the events above actually needs one.
 
 ### Cell layout
 
@@ -65,4 +79,9 @@ gradlew build
 ```toml
 [planarium]
 cellStride = 512
+refreshDebounceTicks = 100
 ```
+
+`refreshDebounceTicks` is the number of ticks to wait after the last block change before refreshing
+a miniature (100 ticks = 5 s, 0 = refresh on every change). Leaving the Planarium always refreshes
+immediately.

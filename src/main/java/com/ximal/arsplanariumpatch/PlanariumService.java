@@ -9,7 +9,6 @@ import com.hollingsworth.arsnouveau.common.network.PacketUpdateDimTile;
 import com.hollingsworth.arsnouveau.common.world.dimension.PlanariumChunkGenerator;
 import com.hollingsworth.arsnouveau.common.world.saved_data.DimMappingData;
 import com.hollingsworth.arsnouveau.common.world.saved_data.JarDimData;
-import com.hollingsworth.arsnouveau.setup.config.ServerConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.core.Vec3i;
@@ -32,17 +31,34 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * All server-side logic that replaces Ars Nouveau's per-planarium dimensions with cells in one
  * shared dimension.
  */
 public final class PlanariumService {
+    /**
+     * Pending miniature refreshes, keyed by the planarium's dimension key. The value is the game
+     * time at which the refresh may run. Nothing is scheduled for an idle planarium, so its cell
+     * chunks are never force-loaded just because time passed.
+     */
+    private static final Map<ResourceKey<Level>, Long> pendingRefreshes = new ConcurrentHashMap<>();
+
+    /**
+     * How long to wait before retrying a refresh that found no eligible recipient. The player who
+     * left a Sable sub-level planarium is not always reported as tracking the plot on the very next
+     * tick, so the update must not be dropped.
+     */
+    private static final int REFRESH_RETRY_TICKS = 20;
+
     private PlanariumService() {
     }
 
     public static void initServer(MinecraftServer server) {
+        pendingRefreshes.clear();
         PlanariumLayoutData layout = PlanariumLayoutData.from(server);
         int configured = configuredStride();
         if (layout.stride() <= 0) {
@@ -221,42 +237,91 @@ public final class PlanariumService {
     /**
      * Server-side tick used instead of {@code PlanariumTile#tick} for the shared dimension.
      *
-     * <p>The vanilla check {@code playersNearby} compares the planarium's block position with the
-     * logical player positions. For a planarium that sits on a Sable sub-level the block position is
-     * the plot position while the player is at the logical position, so vanilla would stop refreshing
-     * the miniature forever. It also marks the template as sent even when the packet reached nobody.</p>
+     * <p>The vanilla loop refreshes on a timer and gates the work on {@code playersNearby}, which
+     * compares the planarium's block position with the logical player positions. A planarium on a
+     * Sable sub-level is never "nearby" (the tile is at its plot position, the player at the logical
+     * one), so vanilla leaves the miniature stale. The timer also re-reads the cell while a player
+     * builds, which force-loads and snapshots the cell several times per second.</p>
+     *
+     * <p>This replacement is purely event driven: it only does work when {@link #scheduleDebouncedRefresh}
+     * or {@link #scheduleImmediateRefresh} queued a refresh (block change or player exit). An idle
+     * planarium costs one map lookup per tick and never touches its cell chunks.</p>
      */
     public static void tick(ServerLevel level, PlanariumTile tile) {
         if (tile.key == null) {
             return;
         }
-        int updateRate = Math.max(1, ServerConfig.PLANARIUM_UPDATE_RATE.get());
-        if (level.getGameTime() % updateRate != 0) {
+        long now = serverGameTime(level);
+        Long due = pendingRefreshes.get(tile.key);
+        if (due == null || now < due) {
             return;
         }
 
         PlanariumTile.DimManager.Entry entry = getOrCreateTemplate(level, tile.getBlockPos(), tile.key);
         if (entry == null || entry.template() == null || entry.lastUpdated() <= tile.lastUpdated) {
+            pendingRefreshes.remove(tile.key);
             return;
         }
-        sendTemplate(level, tile, entry);
+
+        if (sendTemplate(level, tile, entry)) {
+            pendingRefreshes.remove(tile.key);
+        } else {
+            // Nobody eligible was tracking the planarium yet (for example a Sable sub-level player
+            // who has just been teleported out). Retry shortly instead of dropping the update.
+            pendingRefreshes.put(tile.key, now + REFRESH_RETRY_TICKS);
+        }
+    }
+
+    /**
+     * All dimensions of a server share the primary level's clock, but the schedule is often created
+     * from the planarium dimension (where the block changed) and consumed by the owner level's tile
+     * tick. Use one explicit clock for both sides.
+     */
+    private static long serverGameTime(ServerLevel level) {
+        return level.getServer().overworld().getGameTime();
+    }
+
+    /**
+     * Queues a miniature refresh after a block change. Multiple changes are coalesced: the deadline
+     * is pushed forward until the player stops building for the configured debounce period.
+     */
+    public static void scheduleDebouncedRefresh(ResourceKey<Level> key, ServerLevel level) {
+        int debounce = Math.max(0, Config.REFRESH_DEBOUNCE_TICKS.get());
+        long deadline = serverGameTime(level) + debounce;
+        pendingRefreshes.merge(key, deadline, Math::max);
+    }
+
+    /**
+     * Queues an immediate refresh, used when a player leaves the planarium.
+     */
+    public static void scheduleImmediateRefresh(ResourceKey<Level> key, ServerLevel level) {
+        pendingRefreshes.put(key, serverGameTime(level));
+    }
+
+    /**
+     * A client just received a fresh snapshot, so any queued push for the same planarium is no
+     * longer needed.
+     */
+    public static void clearPendingRefresh(ResourceKey<Level> key) {
+        pendingRefreshes.remove(key);
     }
 
     /**
      * Sends the snapshot to every player that is actually tracking the planarium's chunk and is in
-     * the planarium's own level. The tile is only considered up to date once at least one player
-     * received the packet, otherwise the update is retried on the next update tick (and by
-     * {@code PacketClientRequestDim} if the client asks first).
+     * the planarium's own level.
+     *
+     * @return {@code true} when the update was delivered or there was nothing to deliver;
+     * {@code false} when at least one client still needs it but none is tracking the planarium yet
      */
-    public static void sendTemplate(ServerLevel level, PlanariumTile tile, PlanariumTile.DimManager.Entry entry) {
+    public static boolean sendTemplate(ServerLevel level, PlanariumTile tile, PlanariumTile.DimManager.Entry entry) {
         StructureTemplate template = entry.template();
         if (template == null) {
-            return;
+            return true;
         }
 
         List<ServerPlayer> recipients = trackingPlayers(level, tile.getBlockPos());
         if (recipients.isEmpty()) {
-            return;
+            return false;
         }
 
         PacketUpdateDimTile packet = new PacketUpdateDimTile(tile.getBlockPos(), template);
@@ -264,6 +329,7 @@ public final class PlanariumService {
             Networking.sendToPlayerClient(packet, recipient);
         }
         tile.lastUpdated = entry.lastUpdated();
+        return true;
     }
 
     /**
@@ -332,6 +398,7 @@ public final class PlanariumService {
                 PlanariumLayoutData.Entry entry = layout.byCell(cell);
                 if (entry != null) {
                     PlanariumTile.dimManager.markDirty(entry.dimensionKey());
+                    scheduleDebouncedRefresh(entry.dimensionKey(), level);
                 }
             }
         } else {
@@ -339,14 +406,35 @@ public final class PlanariumService {
             insideJar = PlanariumChunkGenerator.innerBox.contains(pos.getX(), pos.getY(), pos.getZ());
             if (insideJar) {
                 PlanariumTile.dimManager.markDirty(level.dimension());
+                scheduleDebouncedRefresh(level.dimension(), level);
             }
         }
 
         if (event.getState().getBlock() instanceof DimBoundary && !insideJar) {
             if (event.getPlayer().canInteractWithBlock(pos, 4.0f)) {
+                scheduleExitRefresh(level, pos);
                 DimBoundary.playerAttemptedBreak(level, event.getPlayer());
             }
             event.setCanceled(true);
+        }
+    }
+
+    /**
+     * A player is about to leave the planarium through its boundary: refresh that cell right away
+     * instead of waiting for the debounce (or for the client to reconnect).
+     */
+    private static void scheduleExitRefresh(ServerLevel level, BlockPos boundaryPos) {
+        if (PlanariumDimension.isShared(level)) {
+            PlanariumLayoutData layout = PlanariumLayoutData.from(level.getServer());
+            long cell = PlanariumDimension.cellOf(boundaryPos, layout.stride());
+            PlanariumLayoutData.Entry entry = layout.byCell(cell);
+            if (entry != null) {
+                PlanariumTile.dimManager.markDirty(entry.dimensionKey());
+                scheduleImmediateRefresh(entry.dimensionKey(), level);
+            }
+        } else {
+            PlanariumTile.dimManager.markDirty(level.dimension());
+            scheduleImmediateRefresh(level.dimension(), level);
         }
     }
 
@@ -364,9 +452,11 @@ public final class PlanariumService {
             PlanariumLayoutData.Entry entry = layout.byCell(cell);
             if (entry != null) {
                 PlanariumTile.dimManager.markDirty(entry.dimensionKey());
+                scheduleDebouncedRefresh(entry.dimensionKey(), level);
             }
         } else {
             PlanariumTile.dimManager.markDirty(level.dimension());
+            scheduleDebouncedRefresh(level.dimension(), level);
         }
     }
 
