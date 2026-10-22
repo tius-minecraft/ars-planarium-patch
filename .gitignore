@@ -1,0 +1,29 @@
+# Gradle / build output
+.gradle/
+build/
+out/
+run/
+runs/
+repo/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+bin/
+
+# Local reference clones (not part of the mod)
+_ref/
+
+# Local test output
+gametest-out.txt
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
