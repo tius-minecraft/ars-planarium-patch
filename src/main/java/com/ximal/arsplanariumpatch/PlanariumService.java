@@ -251,9 +251,12 @@ public final class PlanariumService {
         if (tile.key == null) {
             return;
         }
-        long now = serverGameTime(level);
         Long due = pendingRefreshes.get(tile.key);
-        if (due == null || now < due) {
+        if (due == null) {
+            return;
+        }
+        long now = serverGameTime(level);
+        if (now < due) {
             return;
         }
 
