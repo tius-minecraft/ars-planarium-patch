@@ -1,5 +1,5 @@
 {
-  "type": "ars_nouveau:jar",
+  "type": "ars_planarium_patch:planariums",
   "generator": {
     "type": "ars_planarium_patch:grid",
     "biome": "ars_nouveau:jar"

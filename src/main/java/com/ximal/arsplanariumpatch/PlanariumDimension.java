@@ -8,6 +8,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.dimension.DimensionType;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -24,6 +25,14 @@ import org.jetbrains.annotations.Nullable;
 public final class PlanariumDimension {
     public static final ResourceKey<Level> LEVEL = ResourceKey.create(
             Registries.DIMENSION, ResourceLocation.fromNamespaceAndPath(ArsPlanariumPatch.MODID, "planariums"));
+
+    /**
+     * The shared dimension has its own compact dimension type (128 blocks tall) instead of the
+     * 384-block-tall ars_nouveau:jar type. The grid only occupies Y -1..32, and a smaller height
+     * keeps Sable's per-level physics pipeline cheap.
+     */
+    public static final ResourceKey<DimensionType> DIMENSION_TYPE = ResourceKey.create(
+            Registries.DIMENSION_TYPE, ResourceLocation.fromNamespaceAndPath(ArsPlanariumPatch.MODID, "planariums"));
 
     public static final int CONTENT_SIZE = 32;
     public static final int CONTENT_HEIGHT = 31;
@@ -68,7 +77,7 @@ public final class PlanariumDimension {
      */
     public static boolean hasPlanariumDimensionType(Level level) {
         return level.dimensionTypeRegistration().unwrapKey()
-                .map(key -> key.equals(ArsNouveau.DIMENSION_TYPE_KEY))
+                .map(key -> key.equals(ArsNouveau.DIMENSION_TYPE_KEY) || key.equals(DIMENSION_TYPE))
                 .orElse(false);
     }
 

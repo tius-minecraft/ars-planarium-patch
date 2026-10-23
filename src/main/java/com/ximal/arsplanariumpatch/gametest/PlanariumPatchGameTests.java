@@ -30,6 +30,7 @@ import net.minecraft.world.entity.animal.Pig;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
 import net.neoforged.bus.api.EventPriority;
@@ -146,8 +147,11 @@ public class PlanariumPatchGameTests {
             return;
         }
 
-        helper.assertTrue(stem.type().is(ArsNouveau.DIMENSION_TYPE_KEY),
-                "Dimension must use the ars_nouveau:jar dimension type");
+        helper.assertTrue(stem.type().is(PlanariumDimension.DIMENSION_TYPE),
+                "Dimension must use the compact ars_planarium_patch:planariums dimension type");
+        DimensionType type = stem.type().value();
+        helper.assertTrue(type.minY() == -64 && type.height() == 128 && type.logicalHeight() == 128,
+                "Shared dimension type must stay at height 128 (min_y -64, logical_height 128)");
         helper.assertTrue(stem.generator() instanceof PlanariumGridChunkGenerator,
                 "Dimension must use the grid chunk generator");
         helper.succeed();
