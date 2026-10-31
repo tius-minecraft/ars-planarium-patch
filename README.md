@@ -54,6 +54,11 @@ Cells never overlap: the stride must be a multiple of 16 and at least 64. The va
 the world the first time a Planarium is created; changing the config later logs a warning and keeps
 the stored value (changing it would move existing cells).
 
+New cells are only allocated inside a square of `[-borderRadius, +borderRadius]` blocks around the
+shared dimension origin (`borderRadius` defaults to 1,000,000). A cell must fit its entire 34-block
+boundary box inside that square, so the outer edge never crosses the configured boundary. Existing
+cells are never moved: changing the radius only affects cells allocated afterwards.
+
 ### Migration
 
 On first access to a pre-patch Planarium, its 32x31x32 contents are copied from the old dimension
@@ -79,8 +84,13 @@ gradlew build
 ```toml
 [planarium]
 cellStride = 512
+borderRadius = 1000000
 refreshDebounceTicks = 100
 ```
+
+`borderRadius` is the half-size of the square area (in blocks, around the shared dimension origin)
+where new Planarium cells may be allocated. The default is 1,000,000 blocks. Lower it on servers
+that want a smaller shared dimension footprint; existing cells are not moved.
 
 `refreshDebounceTicks` is the number of ticks to wait after the last block change before refreshing
 a miniature (100 ticks = 5 s, 0 = refresh on every change). Leaving the Planarium always refreshes

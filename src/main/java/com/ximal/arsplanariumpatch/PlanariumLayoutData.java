@@ -129,9 +129,9 @@ public class PlanariumLayoutData extends SavedData {
 
     /**
      * Returns the entry for a planarium, allocating a deterministic cell if this is the first
-     * time we see it.
+     * time we see it. New cells are placed inside the configured border radius.
      */
-    public Entry getOrCreate(String name, ResourceLocation id) {
+    public Entry getOrCreate(String name, ResourceLocation id, int radius) {
         if (stride <= 0) {
             throw new IllegalStateException("Planarium layout stride was not initialized");
         }
@@ -149,7 +149,7 @@ public class PlanariumLayoutData extends SavedData {
             return entry;
         }
 
-        long cell = allocateCell(name);
+        long cell = allocateCell(name, radius);
         entry = new Entry(name, id, cell,
                 PlanariumDimension.DEFAULT_SPAWN.getX(),
                 PlanariumDimension.DEFAULT_SPAWN.getY(),
@@ -163,19 +163,22 @@ public class PlanariumLayoutData extends SavedData {
         return entry;
     }
 
-    private long allocateCell(String name) {
-        PlanariumCell hashed = PlanariumCell.unpack(PlanariumCell.hashCell(name));
+    private long allocateCell(String name, int radius) {
+        int maxIndex = PlanariumCell.maxCellIndex(radius, stride);
+        PlanariumCell hashed = PlanariumCell.unpack(PlanariumCell.hashCell(name, maxIndex));
         int x = hashed.x();
         int z = hashed.z();
-        for (int attempt = 0; attempt < 1_000_000; attempt++) {
+        int span = 2 * maxIndex + 1;
+        long total = (long) span * span;
+        for (long attempt = 0; attempt < total; attempt++) {
             long packed = PlanariumCell.pack(x, z);
             if (!byCell.containsKey(packed)) {
                 return packed;
             }
-            if (++x > PlanariumCell.HASH_MASK) {
-                x = 0;
-                if (++z > PlanariumCell.HASH_MASK) {
-                    z = 0;
+            if (++x > maxIndex) {
+                x = -maxIndex;
+                if (++z > maxIndex) {
+                    z = -maxIndex;
                 }
             }
         }

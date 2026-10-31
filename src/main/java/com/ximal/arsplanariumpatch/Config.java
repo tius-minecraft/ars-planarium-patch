@@ -5,6 +5,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 public final class Config {
     public static final ModConfigSpec SERVER_SPEC;
     public static final ModConfigSpec.IntValue CELL_STRIDE;
+    public static final ModConfigSpec.IntValue BORDER_RADIUS;
     public static final ModConfigSpec.IntValue REFRESH_DEBOUNCE_TICKS;
 
     static {
@@ -20,6 +21,15 @@ public final class Config {
         CELL_STRIDE = builder
                 .comment("Cell stride in blocks (default 512 = 32 chunks, cells are 34 blocks wide).")
                 .defineInRange("cellStride", 512, 64, 4096);
+
+        BORDER_RADIUS = builder
+                .comment(
+                        "Maximum distance from the shared dimension origin, in blocks, where new",
+                        "planarium cells may be allocated (default 1000000). A cell is only placed",
+                        "when its full 34-block boundary box fits inside [-borderRadius, +borderRadius]",
+                        "on both X and Z. Changing this only affects cells allocated afterwards;",
+                        "existing planariums keep their cell.")
+                .defineInRange("borderRadius", 1_000_000, 64, 15_000_000);
 
         REFRESH_DEBOUNCE_TICKS = builder
                 .comment(

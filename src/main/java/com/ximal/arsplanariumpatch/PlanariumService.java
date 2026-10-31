@@ -78,6 +78,15 @@ public final class PlanariumService {
         return (clamped / 16) * 16;
     }
 
+    /**
+     * Border radius used when allocating new cells. Existing cells are never moved, even when the
+     * configured radius shrinks below their distance from the origin.
+     */
+    public static int configuredBorderRadius() {
+        int raw = Config.BORDER_RADIUS.get();
+        return Math.max(64, Math.min(15_000_000, raw));
+    }
+
     public static int stride(MinecraftServer server) {
         return PlanariumLayoutData.from(server).stride();
     }
@@ -107,7 +116,7 @@ public final class PlanariumService {
             name = key.location().toString();
         }
 
-        entry = layout.getOrCreate(name, key.location());
+        entry = layout.getOrCreate(name, key.location(), configuredBorderRadius());
         migrateLegacyIfNeeded(tileLevel, key, entry);
         // Migration updates the spawn and legacy flag, so return the up-to-date entry.
         PlanariumLayoutData.Entry updated = layout.byId(entry.id());

@@ -73,44 +73,60 @@ public class PlanariumPatchGameTests {
 
     @GameTest(template = "empty")
     public static void hashingIsDeterministic(GameTestHelper helper) {
-        long first = PlanariumCell.hashCell("test-planarium");
-        long second = PlanariumCell.hashCell("test-planarium");
-        long other = PlanariumCell.hashCell("test-planarium-2");
+        int maxIndex = PlanariumCell.maxCellIndex(1_000_000, 512);
+        long first = PlanariumCell.hashCell("test-planarium", maxIndex);
+        long second = PlanariumCell.hashCell("test-planarium", maxIndex);
+        long other = PlanariumCell.hashCell("test-planarium-2", maxIndex);
 
+        PlanariumCell cell = PlanariumCell.unpack(first);
         helper.assertTrue(first == second, "The same name must always hash to the same cell");
         helper.assertTrue(first != other, "Different names should hash to different cells");
-        helper.assertTrue(PlanariumCell.unpack(first).x() >= 0, "Cell x must be non-negative");
-        helper.assertTrue(PlanariumCell.unpack(first).z() >= 0, "Cell z must be non-negative");
+        helper.assertTrue(cell.x() >= -maxIndex && cell.x() <= maxIndex,
+                "Cell x must stay inside the configured border radius");
+        helper.assertTrue(cell.z() >= -maxIndex && cell.z() <= maxIndex,
+                "Cell z must stay inside the configured border radius");
         helper.succeed();
     }
 
     /**
      * The world border is shared by every level and cannot be moved by the chunk generator, so the
-     * highest possible cell origin (largest index * largest configured stride) must stay inside it.
+     * furthest possible cell boundary must stay inside it.
      */
     @GameTest(template = "empty")
     public static void cellOriginsStayInsideWorldBorder(GameTestHelper helper) {
         int largestStride = 4096;
-        BlockPos max = new PlanariumCell(PlanariumCell.HASH_MASK, PlanariumCell.HASH_MASK).base(largestStride);
+        int radius = PlanariumService.configuredBorderRadius();
+        int maxIndex = PlanariumCell.maxCellIndex(radius, largestStride);
+        int footprint = PlanariumDimension.FOOTPRINT;
+        BlockPos positive = new PlanariumCell(maxIndex, maxIndex).base(largestStride);
+        BlockPos negative = new PlanariumCell(-maxIndex, -maxIndex).base(largestStride);
         int borderHalfSize = 15_000_000;
 
-        helper.assertTrue(max.getX() < borderHalfSize && max.getZ() < borderHalfSize,
-                "Cell origins must stay inside the world border, highest origin is " + max);
+        helper.assertTrue(positive.getX() + footprint - 1 <= radius
+                        && positive.getZ() + footprint - 1 <= radius,
+                "Positive cells must fit inside the configured radius, highest origin is " + positive);
+        helper.assertTrue(negative.getX() >= -radius && negative.getZ() >= -radius,
+                "Negative cells must fit inside the configured radius, lowest origin is " + negative);
+        helper.assertTrue(positive.getX() + footprint - 1 <= borderHalfSize
+                        && negative.getX() >= -borderHalfSize,
+                "Cell boundaries must stay inside the world border");
         helper.succeed();
     }
 
     @GameTest(template = "empty")
     public static void layoutAllocationIsStable(GameTestHelper helper) {
+        int radius = PlanariumService.configuredBorderRadius();
         PlanariumLayoutData layout = new PlanariumLayoutData();
         layout.ensureStride(512);
 
         ResourceLocation alphaId = ResourceLocation.fromNamespaceAndPath(ArsPlanariumPatch.MODID, "test_alpha");
         ResourceLocation betaId = ResourceLocation.fromNamespaceAndPath(ArsPlanariumPatch.MODID, "test_beta");
 
-        PlanariumLayoutData.Entry alpha = layout.getOrCreate("alpha", alphaId);
-        PlanariumLayoutData.Entry beta = layout.getOrCreate("beta", betaId);
+        PlanariumLayoutData.Entry alpha = layout.getOrCreate("alpha", alphaId, radius);
+        PlanariumLayoutData.Entry beta = layout.getOrCreate("beta", betaId, radius);
 
-        helper.assertTrue(layout.getOrCreate("alpha", alphaId) == alpha, "Repeated lookup must return the same entry");
+        helper.assertTrue(layout.getOrCreate("alpha", alphaId, radius) == alpha,
+                "Repeated lookup must return the same entry");
         helper.assertTrue(alpha.cell() != beta.cell(), "Two different planariums must not share a cell");
         helper.assertTrue(layout.byCell(alpha.cell()) == alpha, "Cell index must resolve back to the entry");
         helper.assertTrue(layout.byId(alphaId) == alpha, "Id index must resolve back to the entry");
@@ -119,6 +135,30 @@ public class PlanariumPatchGameTests {
                 PlanariumDimension.base(alpha.cell(), 512));
         helper.assertTrue(alpha.spawnAbsolute(512).equals(expectedSpawn),
                 "Spawn must be translated into the cell");
+        helper.succeed();
+    }
+
+    /**
+     * Every newly allocated cell must fit its whole 34-block boundary box inside the configured
+     * radius, including cells with negative indices.
+     */
+    @GameTest(template = "empty")
+    public static void allocationRespectsBorderRadius(GameTestHelper helper) {
+        int radius = 4096;
+        int stride = 512;
+        int footprint = PlanariumDimension.FOOTPRINT;
+        PlanariumLayoutData layout = new PlanariumLayoutData();
+        layout.ensureStride(stride);
+
+        for (int i = 0; i < 100; i++) {
+            ResourceLocation id = ResourceLocation.fromNamespaceAndPath(ArsPlanariumPatch.MODID, "radius_" + i);
+            PlanariumLayoutData.Entry entry = layout.getOrCreate("radius-" + i, id, radius);
+            BlockPos base = PlanariumDimension.base(entry.cell(), stride);
+            helper.assertTrue(base.getX() >= -radius && base.getX() + footprint - 1 <= radius,
+                    "Cell x must fit inside the radius: " + base);
+            helper.assertTrue(base.getZ() >= -radius && base.getZ() + footprint - 1 <= radius,
+                    "Cell z must fit inside the radius: " + base);
+        }
         helper.succeed();
     }
 
@@ -360,7 +400,8 @@ public class PlanariumPatchGameTests {
 
         PlanariumLayoutData layout = PlanariumLayoutData.from(server);
         ResourceLocation id = ResourceLocation.fromNamespaceAndPath(ArsPlanariumPatch.MODID, "gametest_legacy");
-        PlanariumLayoutData.Entry entry = layout.getOrCreate("gametest_legacy", id);
+        PlanariumLayoutData.Entry entry = layout.getOrCreate("gametest_legacy", id,
+                PlanariumService.configuredBorderRadius());
         PlanariumService.migrate(legacy, entry);
 
         PlanariumLayoutData.Entry migrated = layout.byId(id);
@@ -373,6 +414,27 @@ public class PlanariumPatchGameTests {
         helper.assertTrue(shared.getBlockState(PlanariumDimension.templateOrigin(base)).is(Blocks.GOLD_BLOCK),
                 "Migration must copy the old cell contents into the shared cell");
         helper.succeed();
+    }
+
+    @GameTest(template = "empty", timeoutTicks = 400)
+    public static void legacyDimensionIsUnregistered(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ensureSharedLevel(server);
+
+        ResourceKey<Level> legacyKey = ResourceKey.create(Registries.DIMENSION,
+                ResourceLocation.fromNamespaceAndPath(ArsPlanariumPatch.MODID, "gametest_legacy_cleanup"));
+        ServerLevel legacy = ensureLevel(server, legacyKey, new PlanariumChunkGenerator(server));
+
+        PlanariumLayoutData layout = PlanariumLayoutData.from(server);
+        PlanariumLayoutData.Entry entry = layout.getOrCreate("gametest_legacy_cleanup", legacyKey.location(),
+                PlanariumService.configuredBorderRadius());
+        PlanariumService.migrate(legacy, entry);
+
+        helper.runAfterDelay(130, () -> {
+            helper.assertTrue(server.getLevel(legacyKey) == null,
+                    "The migrated legacy dimension should be unregistered");
+            helper.succeed();
+        });
     }
 
     /**

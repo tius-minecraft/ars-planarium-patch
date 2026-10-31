@@ -6,16 +6,6 @@ import net.minecraft.core.BlockPos;
  * Identifies a single planarium cell in the shared dimension's infinite grid.
  */
 public record PlanariumCell(int x, int z) {
-    /**
-     * 11 bits per axis give ~4.2 million possible cells, which is far more than any world will
-     * ever need, while keeping every cell origin inside the vanilla world border: the largest
-     * supported stride (4096) times the largest cell index (2047) is ~8.4M blocks, and the
-     * default world border spans +/-15M blocks. (The border is shared by all levels, and the
-     * chunk generator cannot move it.)
-     */
-    public static final int HASH_BITS = 11;
-    public static final int HASH_MASK = (1 << HASH_BITS) - 1;
-
     public static long pack(int x, int z) {
         return ((long) x << 32) | (z & 0xFFFFFFFFL);
     }
@@ -33,6 +23,23 @@ public record PlanariumCell(int x, int z) {
     }
 
     /**
+     * Largest absolute cell index whose full boundary box still fits inside the configured square
+     * border radius. A cell origin is {@code index * stride} and its box extends
+     * {@link PlanariumDimension#FOOTPRINT} - 1 blocks further out, so the outermost origin must
+     * leave room for the whole footprint.
+     */
+    public static int maxCellIndex(int radius, int stride) {
+        if (stride <= 0) {
+            return 0;
+        }
+        long usable = (long) radius - (PlanariumDimension.FOOTPRINT - 1);
+        if (usable < 0) {
+            return 0;
+        }
+        return (int) Math.min(Integer.MAX_VALUE, usable / stride);
+    }
+
+    /**
      * Converts a block position (boundary or interior) into the cell that contains it.
      * Cell origins are always multiples of the stride, so a simple floor division is enough.
      */
@@ -40,10 +47,14 @@ public record PlanariumCell(int x, int z) {
         return pack(Math.floorDiv(pos.getX(), stride), Math.floorDiv(pos.getZ(), stride));
     }
 
-    public static long hashCell(String name) {
+    /**
+     * Hashes a planarium name into the signed cell range {@code [-maxIndex, maxIndex]}.
+     */
+    public static long hashCell(String name, int maxIndex) {
         long hash = hash64(name);
-        int x = (int) (hash & HASH_MASK);
-        int z = (int) ((hash >>> HASH_BITS) & HASH_MASK);
+        int span = 2 * maxIndex + 1;
+        int x = (int) Math.floorMod(hash, (long) span) - maxIndex;
+        int z = (int) Math.floorMod(hash >>> 32, (long) span) - maxIndex;
         return pack(x, z);
     }
 

@@ -32,8 +32,11 @@ public final class LegacyDimensionCleanup {
 
             ServerLevel oldLevel = server.getLevel(entry.dimensionKey());
             if (oldLevel == null) {
-                // Already unregistered (or never existed).
+                // Already unregistered (or never existed). Only now clear the persisted flag, so a
+                // failed or cancelled unregistration is retried on the next cleanup pass.
                 layout.setLegacy(entry, false);
+                ArsPlanariumPatch.LOGGER.info("Legacy planarium dimension {} for '{}' is no longer registered",
+                        entry.dimensionKey().location(), entry.name());
                 continue;
             }
             if (!oldLevel.players().isEmpty()) {
@@ -41,8 +44,9 @@ public final class LegacyDimensionCleanup {
             }
 
             if (InfiniverseCompat.unregisterDimension(server, oldLevel.dimension())) {
-                layout.setLegacy(entry, false);
-                ArsPlanariumPatch.LOGGER.info("Unregistered legacy planarium dimension {} for '{}'",
+                // Infiniverse only schedules the removal; it is completed on a later server tick.
+                // Keep the legacy flag until server.getLevel(key) actually returns null.
+                ArsPlanariumPatch.LOGGER.info("Requested unregistration of legacy planarium dimension {} for '{}'",
                         oldLevel.dimension().location(), entry.name());
             }
         }
